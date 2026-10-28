@@ -34,3 +34,7 @@ The GitHub Actions workflow accepts Android SDK licenses non-interactively with 
 
 ## Workflow fix: obsolete `tools` package
 The Android setup step explicitly installs `platform-tools` only and accepts SDK licenses non-interactively. It no longer asks `sdkmanager` to install the removed legacy package named `tools`, which caused `Warning: Failed to find package 'tools'` and failed the setup action.
+
+
+## Version 1.0.2 compile fix
+Fixed Kotlin compilation errors reported by GitHub Actions: use `isSingleLine` for the EditText property and convert decimal seconds to microseconds as `Long` before calling the trimming function. The Android SDK workflow avoids the obsolete `tools` package.
