@@ -37,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
     private lateinit var preview: VideoView
+    private lateinit var playbackButton: Button
     private lateinit var timeline: SeekBar
     private lateinit var positionLabel: TextView
     private lateinit var durationLabel: TextView
@@ -97,6 +98,20 @@ class MainActivity : Activity() {
         }
         val previewParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 220)
         content.addView(preview, previewParams)
+        playbackButton = Button(this).apply {
+            text = "پخش فیلم"
+            isEnabled = false
+            setOnClickListener {
+                if (preview.isPlaying) {
+                    preview.pause()
+                    text = "ادامه پخش"
+                } else if (selectedUri != null && durationMs > 0) {
+                    preview.start()
+                    text = "توقف موقت"
+                }
+            }
+        }
+        content.addView(playbackButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         val timelineTitle = TextView(this).apply {
             text = "نوار زمانی فیلم — برای دیدن صحنه حرکت بده"
             textSize = 15f
@@ -214,23 +229,32 @@ class MainActivity : Activity() {
             cutButton.isEnabled = true
             timeline.isEnabled = false
             durationMs = 0
-            preview.setVideoURI(uri)
+            preview.stopPlayback()
+            playbackButton.isEnabled = false
+            playbackButton.text = "در حال آماده‌سازی فیلم…"
             preview.setOnPreparedListener { player ->
                 durationMs = player.duration.coerceAtLeast(0)
                 timeline.max = 1000
                 timeline.progress = 0
                 timeline.isEnabled = durationMs > 0
-                positionLabel.text = "00:00"
+                positionLabel.text = "00:00:00"
                 durationLabel.text = formatTime(durationMs)
-                preview.seekTo(0)
+                playbackButton.isEnabled = durationMs > 0
+                playbackButton.text = "توقف موقت"
+                // Starting playback forces VideoView to render decoded frames instead of
+                // leaving some devices on a black surface until the first manual play.
+                preview.start()
                 handler.removeCallbacks(timelineTicker)
                 handler.post(timelineTicker)
-                statusLabel.text = "فیلم آماده است؛ روی نوار حرکت کن و در صحنهٔ دلخواه شروع و پایان را علامت بزن."
+                statusLabel.text = "فیلم آماده است؛ پخش را می‌توانی متوقف کنی و روی نوار زمانی جابه‌جا شوی."
             }
             preview.setOnErrorListener { _, what, extra ->
-                statusLabel.text = "پیش‌نمایش این فایل پخش نشد (کد $what/$extra). می‌توانی خطا را برای بررسی بفرستی."
+                playbackButton.isEnabled = false
+                playbackButton.text = "پخش در دسترس نیست"
+                statusLabel.text = "پیش‌نمایش این فایل پخش نشد (کد $what/$extra). ممکن است کدک دستگاه پشتیبانی نشود."
                 true
             }
+            preview.setVideoURI(uri)
         }
     }
 
@@ -272,18 +296,23 @@ class MainActivity : Activity() {
         try {
             extractor.setDataSource(this, inputUri, null)
 
-            var hasVideo = false
+            var videoTrackIndex = -1
             for (i in 0 until extractor.trackCount) {
                 val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/")) hasVideo = true
+                if (mime.startsWith("video/")) {
+                    videoTrackIndex = i
+                    break
+                }
             }
-            if (!hasVideo) throw IllegalStateException("ردیف تصویری قابل‌استفاده پیدا نشد")
+            if (videoTrackIndex < 0) throw IllegalStateException("ردیف تصویری قابل‌استفاده پیدا نشد")
 
-            // Stream-copy must retain the previous video keyframe, otherwise the output
-            // can begin with undecodable inter-frames and appear broken.
+            // MediaExtractor.sampleTime is -1 until at least one track is selected.
+            // Select the video track before seeking so the previous video keyframe can
+            // be found and the output starts with a decodable frame.
+            extractor.selectTrack(videoTrackIndex)
             extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             val actualStartUs = extractor.sampleTime
-            if (actualStartUs < 0L) throw IllegalStateException("در زمان انتخاب‌شده فریم قابل‌برشی پیدا نشد")
+            if (actualStartUs < 0L) throw IllegalStateException("برای این فیلم فریم کلیدی قابل‌استفاده پیدا نشد؛ زمان دیگری را انتخاب کن.")
 
             outputUri = createOutputUri()
             outputFd = contentResolver.openFileDescriptor(outputUri, "rw")
@@ -308,7 +337,9 @@ class MainActivity : Activity() {
                 throw IllegalStateException("ردیف تصویری این فیلم قابل‌کپی نیست")
             }
 
-            trackMap.keys.forEach { extractor.selectTrack(it) }
+            trackMap.keys.forEach { if (it != videoTrackIndex) extractor.selectTrack(it) }
+            // Re-seek after selecting the remaining tracks; samples before the chosen
+            // video keyframe are ignored below to keep output timestamps non-negative.
             extractor.seekTo(actualStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             muxer!!.start()
             muxerStarted = true

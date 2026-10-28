@@ -27,3 +27,9 @@ The workflow intentionally uses the installed Gradle command instead of `./gradl
 5. Open GitHub's **Actions** tab. The workflow should appear after the push.
 
 If a commit exists only locally and has not been pushed, GitHub Actions cannot see it. Do not use Reset (hard), Delete, or force-push to try to make the workflow appear.
+
+
+## Review update (2026-10-28)
+- Fixed the trim failure caused by reading `MediaExtractor.sampleTime` before selecting a track. The video track is now selected before seeking to a keyframe.
+- Added an explicit play/pause control and moved `setVideoURI` after the prepared/error listeners are registered to improve preview startup on devices that otherwise show a black surface.
+- The ZIP intended for source updates excludes `.git`; do not replace your existing local `.git` directory when applying it to a repository that already has commit history.
