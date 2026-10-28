@@ -28,14 +28,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK command-line tools
         uses: android-actions/setup-android@v3
+        with:
+          # Explicitly avoid the obsolete SDK package named "tools".
+          packages: 'platform-tools'
+          cmdline-tools-version: 'latest'
+          accept-android-sdk-licenses: true
 
-      - name: Install Android SDK packages
+      - name: Install required Android SDK packages
+        shell: bash
         run: |
-          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set up Gradle (no wrapper required)
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
