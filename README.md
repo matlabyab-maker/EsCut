@@ -33,3 +33,6 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - Added video preview, a custom seek bar, and current/duration time display that updates during playback. The bar supports seeking and uses a normalized scale for long videos.
 - Output names combine the source filename and cut timestamp, for example `OriginalName_cut_20261028_221000.mp4`.
 - Output remains pending until writing finishes, then is published in `Movies/EsCut`.
+
+## Build workflow fix
+The workflow avoids `android-actions/setup-android@v3` because its default legacy `tools` package caused `Failed to find package 'tools'`. It uses the Android SDK already provisioned on the GitHub-hosted runner and explicitly installs only platform 35, build-tools 35.0.0, and platform-tools.
