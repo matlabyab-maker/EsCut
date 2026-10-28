@@ -29,10 +29,7 @@ The workflow intentionally uses the installed Gradle command instead of `./gradl
 If a commit exists only locally and has not been pushed, GitHub Actions cannot see it. Do not use Reset (hard), Delete, or force-push to try to make the workflow appear.
 
 
-## Review update (2026-10-28)
-- Fixed the trim failure caused by reading `MediaExtractor.sampleTime` before selecting a track. The video track is now selected before seeking to a keyframe.
-- Added an explicit play/pause control and moved `setVideoURI` after the prepared/error listeners are registered to improve preview startup on devices that otherwise show a black surface.
-- The ZIP intended for source updates excludes `.git`; do not replace your existing local `.git` directory when applying it to a repository that already has commit history.
-
-## Preview player update
-The preview now uses AndroidX Media3 ExoPlayer and PlayerView instead of the platform VideoView, to improve playback compatibility and show explicit playback errors. Actual playback still depends on the device and source codec/container.
+## Version 1.1 fixes
+- Added video preview, a custom seek bar, and current/duration time display that updates during playback. The bar supports seeking and uses a normalized scale for long videos.
+- Output names combine the source filename and cut timestamp, for example `OriginalName_cut_20261028_221000.mp4`.
+- Output remains pending until writing finishes, then is published in `Movies/EsCut`.

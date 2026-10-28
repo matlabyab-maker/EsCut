@@ -3,30 +3,28 @@ package com.escut.app
 import android.app.Activity
 import android.content.ContentValues
 import android.content.Intent
+import android.database.Cursor
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
-import android.view.Gravity
-import android.view.ViewGroup
 import android.os.Handler
 import android.os.Looper
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.view.Gravity
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
+import android.widget.VideoView
 import android.widget.TextView
 import android.widget.Toast
 import java.nio.ByteBuffer
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,35 +33,41 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
     private val pickVideoCode = 101
     private var selectedUri: Uri? = null
+    private var originalVideoName = "Video"
+    private lateinit var videoView: VideoView
+    private lateinit var playbackSeekBar: SeekBar
+    private lateinit var playbackTime: TextView
+    private lateinit var playPauseButton: Button
+    private var durationMs = 0
+    private var userSeeking = false
+    private val handler = Handler(Looper.getMainLooper())
+    private val progressUpdater = object : Runnable {
+        override fun run() {
+            if (selectedUri != null && durationMs > 0) {
+                if (!userSeeking) {
+                    val position = videoView.currentPosition.coerceAtLeast(0)
+                    playbackSeekBar.progress = (position.toLong() * 1000 / durationMs).toInt().coerceIn(0, 1000)
+                    playbackTime.text = "${formatTime(position)} / ${formatTime(durationMs)}"
+                }
+                handler.postDelayed(this, 250)
+            }
+        }
+    }
     private lateinit var selectedLabel: TextView
     private lateinit var startInput: EditText
     private lateinit var endInput: EditText
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
-    private lateinit var preview: PlayerView
-    private var player: ExoPlayer? = null
-    private lateinit var playbackButton: Button
-    private lateinit var timeline: SeekBar
-    private lateinit var positionLabel: TextView
-    private lateinit var durationLabel: TextView
-    private lateinit var startMarkLabel: TextView
-    private var durationMs: Int = 0
-    private var updatingTimeline = false
-    private val handler = Handler(Looper.getMainLooper())
-    private val timelineTicker = object : Runnable {
-        override fun run() {
-            if (player?.isPlaying == true && !updatingTimeline) {
-                val position = player?.currentPosition?.toInt() ?: 0
-                timeline.progress = position.coerceIn(0, timeline.max.coerceAtLeast(0))
-                positionLabel.text = formatTime(position)
-            }
-            handler.postDelayed(this, 250)
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(progressUpdater)
+        if (::videoView.isInitialized) { try { videoView.stopPlayback() } catch (_: Exception) {} }
+        super.onDestroy()
     }
 
     private fun buildUi() {
@@ -90,6 +94,45 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(0xFF334155.toInt())
         }
+        videoView = VideoView(this).apply {
+            setBackgroundColor(0xFF111827.toInt())
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(220))
+        }
+        playbackTime = TextView(this).apply {
+            text = "00:00 / 00:00"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(0, 6, 0, 0)
+            setTextColor(0xFF0F172A.toInt())
+        }
+        playbackSeekBar = SeekBar(this).apply {
+            max = 1000
+            progress = 0
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onStartTrackingTouch(seekBar: SeekBar?) { userSeeking = true }
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser && durationMs > 0) {
+                        val target = (durationMs.toLong() * progress / 1000).toInt()
+                        playbackTime.text = "${formatTime(target)} / ${formatTime(durationMs)}"
+                    }
+                }
+                override fun onStopTrackingTouch(seekBar: SeekBar?) {
+                    if (durationMs > 0) videoView.seekTo((durationMs.toLong() * playbackSeekBar.progress / 1000).toInt())
+                    userSeeking = false
+                }
+            })
+        }
+        playPauseButton = Button(this).apply {
+            text = "پخش / توقف"
+            isEnabled = false
+            setOnClickListener {
+                if (videoView.isPlaying) {
+                    videoView.pause(); text = "ادامه پخش"
+                } else {
+                    videoView.start(); text = "توقف پخش"
+                }
+            }
+        }
         val choose = Button(this).apply {
             text = "انتخاب فیلم"
             setOnClickListener { openVideoPicker() }
@@ -97,94 +140,12 @@ class MainActivity : Activity() {
         selectedLabel = TextView(this).apply {
             text = "هنوز فیلمی انتخاب نشده است"
             textSize = 14f
-            setPadding(0, 14, 0, 10)
+            setPadding(0, 14, 0, 18)
         }
-        preview = PlayerView(this).apply {
-            setBackgroundColor(0xFF111827.toInt())
-            useController = false
-            keepScreenOn = true
-        }
-        val previewParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 220)
-        content.addView(preview, previewParams)
-        playbackButton = Button(this).apply {
-            text = "پخش فیلم"
-            isEnabled = false
-            setOnClickListener {
-                if (player?.isPlaying == true) {
-                    player?.pause()
-                    text = "ادامه پخش"
-                } else if (selectedUri != null && durationMs > 0) {
-                    player?.play()
-                    text = "توقف موقت"
-                }
-            }
-        }
-        content.addView(playbackButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        val timelineTitle = TextView(this).apply {
-            text = "نوار زمانی فیلم — برای دیدن صحنه حرکت بده"
-            textSize = 15f
-            setTextColor(0xFF172554.toInt())
-            setPadding(0, 12, 0, 4)
-        }
-        timeline = SeekBar(this).apply {
-            max = 1000
-            progress = 0
-            isEnabled = false
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser && durationMs > 0) {
-                        val target = (durationMs.toLong() * progress / 1000L).toInt()
-                        player?.seekTo(target.toLong())
-                        positionLabel.text = formatTime(target)
-                    }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) { updatingTimeline = true }
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {
-                    updatingTimeline = false
-                    if (durationMs > 0) player?.seekTo(durationMs.toLong() * timeline.progress / 1000L)
-                }
-            })
-        }
-        val timeRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        positionLabel = TextView(this).apply { text = "00:00"; textSize = 13f }
-        durationLabel = TextView(this).apply { text = "00:00"; textSize = 13f; gravity = Gravity.END }
-        timeRow.addView(positionLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        timeRow.addView(durationLabel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        val markRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val markStart = Button(this).apply {
-            text = "شروع در این صحنه"
-            setOnClickListener {
-                if (durationMs > 0) {
-                    startInput.setText("%.3f".format(Locale.US, (player?.currentPosition ?: 0L) / 1000.0))
-                    startMarkLabel.text = "شروع: ${formatTime((player?.currentPosition ?: 0L).toInt())}"
-                }
-            }
-        }
-        val markEnd = Button(this).apply {
-            text = "پایان در این صحنه"
-            setOnClickListener {
-                if (durationMs > 0) endInput.setText("%.3f".format(Locale.US, (player?.currentPosition ?: 0L) / 1000.0))
-            }
-        }
-        markRow.addView(markStart, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        markRow.addView(markEnd, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        startMarkLabel = TextView(this).apply {
-            text = "نقطهٔ شروع هنوز انتخاب نشده است"
-            textSize = 13f
-            setTextColor(0xFF475569.toInt())
-        }
-        content.addView(timelineTitle)
-        content.addView(timeline, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(timeRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(markRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(startMarkLabel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        startInput = field("شروع برش (ثانیه)")
+        startInput = field("شروع برش (ثانیه)، مثال: 10")
         endInput = field("پایان برش (ثانیه)، مثال: 60")
         val hint = TextView(this).apply {
-            text = "با نوار زمانی صحنه را پیدا کن و شروع/پایان را علامت بزن. در حالت حفظ کدک اصلی، برش دقیق به فریم کلیدی وابسته است."
+            text = "نسخه ۱: یک بازه را جدا می‌کند. جریان‌های صوتی/تصویری بدون رمزگذاری مجدد کپی می‌شوند؛ برش ممکن است به فریم کلیدی نزدیک شود."
             textSize = 13f
             setTextColor(0xFF475569.toInt())
             setPadding(0, 12, 0, 14)
@@ -199,19 +160,41 @@ class MainActivity : Activity() {
             textSize = 14f
             setPadding(0, 16, 0, 8)
         }
-        val fullWidth = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        listOf(title, subtitle, choose, selectedLabel).forEachIndexed { index, view -> content.addView(view, index, fullWidth) }
-        listOf(startInput, endInput, hint, cutButton, statusLabel)
+        listOf(title, subtitle, videoView, playbackTime, playbackSeekBar, playPauseButton, choose, selectedLabel, startInput, endInput, hint, cutButton, statusLabel)
             .forEach { content.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)) }
         scroll.addView(content)
         root.addView(scroll)
         setContentView(root)
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun formatTime(milliseconds: Int): String {
+        val total = milliseconds.coerceAtLeast(0) / 1000
+        val hours = total / 3600
+        val minutes = (total % 3600) / 60
+        val seconds = total % 60
+        return if (hours > 0) String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+        else String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+
+    private fun displayName(uri: Uri): String {
+        var name = "Video"
+        var cursor: Cursor? = null
+        try {
+            cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            if (cursor != null && cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index >= 0) name = cursor.getString(index) ?: name
+            }
+        } catch (_: Exception) { } finally { cursor?.close() }
+        return name
+    }
+
     private fun field(hintText: String): EditText = EditText(this).apply {
         hint = hintText
         textSize = 16f
-        setSingleLine(true)
+        singleLine = true
         inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         setPadding(12, 8, 12, 8)
     }
@@ -233,43 +216,38 @@ class MainActivity : Activity() {
             try {
                 contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (_: Exception) {}
-            selectedLabel.text = "فیلم انتخاب شد:\n${uri.lastPathSegment ?: uri}"
-            cutButton.isEnabled = true
-            timeline.isEnabled = false
+            val fullName = displayName(uri)
+            originalVideoName = fullName.substringBeforeLast('.', fullName).ifBlank { "Video" }
+            selectedLabel.text = "فیلم انتخاب شد:\n$fullName"
+            cutButton.isEnabled = false
+            playPauseButton.isEnabled = false
             durationMs = 0
-            player?.release()
-            player = null
-            preview.player = null
-            playbackButton.isEnabled = false
-            playbackButton.text = "در حال آماده‌سازی فیلم…"
-            val exoPlayer = ExoPlayer.Builder(this).build()
-            player = exoPlayer
-            preview.player = exoPlayer
-            exoPlayer.addListener(object : Player.Listener {
-                override fun onPlaybackStateChanged(playbackState: Int) {
-                    if (playbackState == Player.STATE_READY) {
-                        durationMs = exoPlayer.duration.takeIf { it > 0L && it < Int.MAX_VALUE }?.toInt() ?: 0
-                        timeline.max = 1000
-                        timeline.progress = 0
-                        timeline.isEnabled = durationMs > 0
-                        positionLabel.text = "00:00:00"
-                        durationLabel.text = formatTime(durationMs)
-                        playbackButton.isEnabled = durationMs > 0
-                        playbackButton.text = "پخش فیلم"
-                        statusLabel.text = "فیلم آماده است؛ برای نمایش تصویر، پخش را بزن."
-                    }
+            playbackSeekBar.progress = 0
+            playbackTime.text = "00:00 / 00:00"
+            try {
+                videoView.setVideoURI(uri)
+                videoView.setOnPreparedListener { player ->
+                    durationMs = player.duration.coerceAtLeast(0)
+                    playbackTime.text = "${formatTime(videoView.currentPosition)} / ${formatTime(durationMs)}"
+                    playbackSeekBar.progress = 0
+                    playPauseButton.isEnabled = true
+                    cutButton.isEnabled = true
+                    statusLabel.text = "فیلم آماده است؛ نوار زمان و زمان جاری پخش نمایش داده می‌شود."
+                    handler.removeCallbacks(progressUpdater)
+                    handler.post(progressUpdater)
                 }
-
-                override fun onPlayerError(error: PlaybackException) {
-                    playbackButton.isEnabled = false
-                    playbackButton.text = "پخش در دسترس نیست"
-                    statusLabel.text = "پیش‌نمایش پخش نشد: ${error.errorCodeName}. ممکن است کدک یا ظرف فایل پشتیبانی نشود."
+                videoView.setOnCompletionListener {
+                    playbackSeekBar.progress = 1000
+                    playbackTime.text = "${formatTime(durationMs)} / ${formatTime(durationMs)}"
+                    playPauseButton.text = "پخش دوباره"
                 }
-            })
-            exoPlayer.setMediaItem(MediaItem.fromUri(uri))
-            exoPlayer.prepare()
-            handler.removeCallbacks(timelineTicker)
-            handler.post(timelineTicker)
+                videoView.setOnErrorListener { _, what, extra ->
+                    statusLabel.text = "پیش‌نمایش این فرمت پشتیبانی نشد ($what/$extra)."
+                    true
+                }
+            } catch (e: Exception) {
+                statusLabel.text = "پیش‌نمایش باز نشد: ${e.localizedMessage ?: "خطا"}"
+            }
         }
     }
 
@@ -285,11 +263,11 @@ class MainActivity : Activity() {
         statusLabel.text = "در حال برش… لطفاً برنامه را باز نگه دارید."
         thread {
             try {
-                val outputUri = trimWithoutReencode(uri, (startSec * 1_000_000L).toLong(), (endSec * 1_000_000L).toLong())
+                val outputUri = trimWithoutReencode(uri, startSec * 1_000_000L, endSec * 1_000_000L)
                 runOnUiThread {
-                    statusLabel.text = "فایل خروجی ساخته شد.\nبرای حفظ کدک اصلی، شروع برش ممکن است تا فریم کلیدی قبلی عقب‌تر باشد.\nمسیر: Movies/EsCut"
+                    statusLabel.text = "برش تمام شد.\nنام فایل: ${displayName(outputUri)}\nمسیر: Movies/EsCut"
                     cutButton.isEnabled = true
-                    toast("فایل خروجی ساخته شد.")
+                    toast("برش با موفقیت انجام شد.")
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -304,133 +282,78 @@ class MainActivity : Activity() {
     private fun trimWithoutReencode(inputUri: Uri, startUs: Long, endUs: Long): Uri {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
-        var outputFd: android.os.ParcelFileDescriptor? = null
         var outputUri: Uri? = null
-        var muxerStarted = false
-        var success = false
         try {
             extractor.setDataSource(this, inputUri, null)
-
-            var videoTrackIndex = -1
-            for (i in 0 until extractor.trackCount) {
-                val mime = extractor.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/")) {
-                    videoTrackIndex = i
-                    break
-                }
-            }
-            if (videoTrackIndex < 0) throw IllegalStateException("ردیف تصویری قابل‌استفاده پیدا نشد")
-
-            // MediaExtractor.sampleTime is -1 until at least one track is selected.
-            // Select the video track before seeking so the previous video keyframe can
-            // be found and the output starts with a decodable frame.
-            extractor.selectTrack(videoTrackIndex)
-            extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            val actualStartUs = extractor.sampleTime
-            if (actualStartUs < 0L) throw IllegalStateException("برای این فیلم فریم کلیدی قابل‌استفاده پیدا نشد؛ زمان دیگری را انتخاب کن.")
-
-            outputUri = createOutputUri()
-            outputFd = contentResolver.openFileDescriptor(outputUri, "rw")
+            val createdUri = createOutputUri(buildOutputName())
+            outputUri = createdUri
+            val outputFd = contentResolver.openFileDescriptor(createdUri, "rw")
                 ?: throw IllegalStateException("فایل خروجی باز نشد")
-            muxer = MediaMuxer(outputFd!!.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-
-            val trackMap = mutableMapOf<Int, Int>()
-            for (i in 0 until extractor.trackCount) {
-                val format = extractor.getTrackFormat(i)
-                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
-                if (mime.startsWith("video/") || mime.startsWith("audio/")) {
-                    try {
+            outputFd.use { parcel ->
+                muxer = MediaMuxer(parcel.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                val trackMap = mutableMapOf<Int, Int>()
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                    if (mime.startsWith("video/") || mime.startsWith("audio/")) {
                         trackMap[i] = muxer!!.addTrack(format)
-                    } catch (e: Exception) {
-                        if (mime.startsWith("video/")) throw IllegalStateException(
-                            "کدک تصویری این فیلم برای کپی مستقیم در MP4 پشتیبانی نمی‌شود", e
-                        )
                     }
                 }
-            }
-            if (trackMap.keys.none { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true }) {
-                throw IllegalStateException("ردیف تصویری این فیلم قابل‌کپی نیست")
-            }
-
-            trackMap.keys.forEach { if (it != videoTrackIndex) extractor.selectTrack(it) }
-            // Re-seek after selecting the remaining tracks; samples before the chosen
-            // video keyframe are ignored below to keep output timestamps non-negative.
-            extractor.seekTo(actualStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-            muxer!!.start()
-            muxerStarted = true
-
-            val buffer = ByteBuffer.allocateDirect(8 * 1024 * 1024)
-            val info = android.media.MediaCodec.BufferInfo()
-            var writtenSamples = 0
-            while (true) {
-                val sampleTrack = extractor.sampleTrackIndex
-                if (sampleTrack < 0) break
-                val sampleTime = extractor.sampleTime
-                if (sampleTime >= endUs) break
-                if (trackMap.containsKey(sampleTrack) && sampleTime >= actualStartUs) {
-                    buffer.clear()
-                    val size = extractor.readSampleData(buffer, 0)
-                    if (size < 0) break
-                    info.offset = 0
-                    info.size = size
-                    info.presentationTimeUs = sampleTime - actualStartUs
-                    info.flags = extractor.sampleFlags
-                    muxer!!.writeSampleData(trackMap[sampleTrack]!!, buffer, info)
-                    writtenSamples++
+                if (trackMap.isEmpty()) throw IllegalStateException("ردیف صوتی یا تصویری قابل‌استفاده پیدا نشد")
+                muxer!!.start()
+                trackMap.keys.forEach { extractor.selectTrack(it) }
+                extractor.seekTo(startUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                val maxSize = (1 shl 20) * 8
+                val buffer = ByteBuffer.allocateDirect(maxSize)
+                val info = android.media.MediaCodec.BufferInfo()
+                while (true) {
+                    val sampleTrack = extractor.sampleTrackIndex
+                    if (sampleTrack < 0) break
+                    val sampleTime = extractor.sampleTime
+                    if (sampleTime >= endUs) break
+                    if (trackMap.containsKey(sampleTrack) && sampleTime >= startUs) {
+                        buffer.clear()
+                        val size = extractor.readSampleData(buffer, 0)
+                        if (size < 0) break
+                        info.offset = 0
+                        info.size = size
+                        info.presentationTimeUs = sampleTime - startUs
+                        info.flags = extractor.sampleFlags
+                        muxer!!.writeSampleData(trackMap[sampleTrack]!!, buffer, info)
+                    }
+                    if (!extractor.advance()) break
                 }
-                if (!extractor.advance()) break
+                muxer!!.stop()
             }
-            if (writtenSamples == 0) throw IllegalStateException("در این بازه نمونهٔ صوتی/تصویری قابل‌نوشتن پیدا نشد")
-
-            muxer!!.stop()
-            muxerStarted = false
-            muxer!!.release()
+            muxer?.release()
             muxer = null
-            outputFd!!.close()
-            outputFd = null
-
             val done = ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }
-            contentResolver.update(outputUri!!, done, null, null)
-            success = true
-            return outputUri!!
+            contentResolver.update(createdUri, done, null, null)
+            return createdUri
+        } catch (e: Exception) {
+            outputUri?.let { try { contentResolver.delete(it, null, null) } catch (_: Exception) {} }
+            throw e
         } finally {
-            if (muxerStarted) {
-                try { muxer?.stop() } catch (_: Exception) {}
-            }
-            try { muxer?.release() } catch (_: Exception) {}
-            try { outputFd?.close() } catch (_: Exception) {}
             try { extractor.release() } catch (_: Exception) {}
-            if (!success && outputUri != null) {
-                try { contentResolver.delete(outputUri!!, null, null) } catch (_: Exception) {}
-            }
+            try { muxer?.release() } catch (_: Exception) {}
         }
     }
 
-    private fun createOutputUri(): Uri {
+    private fun buildOutputName(): String {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val safeName = originalVideoName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().trim('.').ifBlank { "Video" }.take(100)
+        return "${safeName}_cut_${stamp}.mp4"
+    }
+
+    private fun createOutputUri(fileName: String): Uri {
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "EsCut_$stamp.mp4")
+            put(MediaStore.Video.Media.DISPLAY_NAME, fileName)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
             put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EsCut")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
         return contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             ?: throw IllegalStateException("ساخت فایل خروجی ممکن نشد")
-    }
-
-    private fun formatTime(ms: Int): String {
-        val total = (ms.coerceAtLeast(0) / 1000)
-        return String.format(Locale.US, "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
-    }
-
-    override fun onDestroy() {
-        handler.removeCallbacks(timelineTicker)
-        if (::preview.isInitialized) {
-            player?.release()
-            player = null
-            preview.player = null
-        }
-        super.onDestroy()
     }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
