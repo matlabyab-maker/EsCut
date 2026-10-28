@@ -19,10 +19,14 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
-import android.widget.VideoView
 import android.widget.TextView
 import android.widget.Toast
 import java.nio.ByteBuffer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,7 +40,8 @@ class MainActivity : Activity() {
     private lateinit var endInput: EditText
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
-    private lateinit var preview: VideoView
+    private lateinit var preview: PlayerView
+    private var player: ExoPlayer? = null
     private lateinit var playbackButton: Button
     private lateinit var timeline: SeekBar
     private lateinit var positionLabel: TextView
@@ -47,9 +52,10 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private val timelineTicker = object : Runnable {
         override fun run() {
-            if (::preview.isInitialized && preview.isPlaying && !updatingTimeline) {
-                timeline.progress = preview.currentPosition.coerceIn(0, timeline.max.coerceAtLeast(0))
-                positionLabel.text = formatTime(preview.currentPosition)
+            if (player?.isPlaying == true && !updatingTimeline) {
+                val position = player?.currentPosition?.toInt() ?: 0
+                timeline.progress = position.coerceIn(0, timeline.max.coerceAtLeast(0))
+                positionLabel.text = formatTime(position)
             }
             handler.postDelayed(this, 250)
         }
@@ -93,8 +99,10 @@ class MainActivity : Activity() {
             textSize = 14f
             setPadding(0, 14, 0, 10)
         }
-        preview = VideoView(this).apply {
+        preview = PlayerView(this).apply {
             setBackgroundColor(0xFF111827.toInt())
+            useController = false
+            keepScreenOn = true
         }
         val previewParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 220)
         content.addView(preview, previewParams)
@@ -102,11 +110,11 @@ class MainActivity : Activity() {
             text = "پخش فیلم"
             isEnabled = false
             setOnClickListener {
-                if (preview.isPlaying) {
-                    preview.pause()
+                if (player?.isPlaying == true) {
+                    player?.pause()
                     text = "ادامه پخش"
                 } else if (selectedUri != null && durationMs > 0) {
-                    preview.start()
+                    player?.play()
                     text = "توقف موقت"
                 }
             }
@@ -126,14 +134,14 @@ class MainActivity : Activity() {
                 override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                     if (fromUser && durationMs > 0) {
                         val target = (durationMs.toLong() * progress / 1000L).toInt()
-                        preview.seekTo(target)
+                        player?.seekTo(target.toLong())
                         positionLabel.text = formatTime(target)
                     }
                 }
                 override fun onStartTrackingTouch(seekBar: SeekBar?) { updatingTimeline = true }
                 override fun onStopTrackingTouch(seekBar: SeekBar?) {
                     updatingTimeline = false
-                    if (durationMs > 0) preview.seekTo((durationMs.toLong() * timeline.progress / 1000L).toInt())
+                    if (durationMs > 0) player?.seekTo(durationMs.toLong() * timeline.progress / 1000L)
                 }
             })
         }
@@ -150,15 +158,15 @@ class MainActivity : Activity() {
             text = "شروع در این صحنه"
             setOnClickListener {
                 if (durationMs > 0) {
-                    startInput.setText("%.3f".format(Locale.US, preview.currentPosition / 1000.0))
-                    startMarkLabel.text = "شروع: ${formatTime(preview.currentPosition)}"
+                    startInput.setText("%.3f".format(Locale.US, (player?.currentPosition ?: 0L) / 1000.0))
+                    startMarkLabel.text = "شروع: ${formatTime((player?.currentPosition ?: 0L).toInt())}"
                 }
             }
         }
         val markEnd = Button(this).apply {
             text = "پایان در این صحنه"
             setOnClickListener {
-                if (durationMs > 0) endInput.setText("%.3f".format(Locale.US, preview.currentPosition / 1000.0))
+                if (durationMs > 0) endInput.setText("%.3f".format(Locale.US, (player?.currentPosition ?: 0L) / 1000.0))
             }
         }
         markRow.addView(markStart, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
@@ -229,32 +237,39 @@ class MainActivity : Activity() {
             cutButton.isEnabled = true
             timeline.isEnabled = false
             durationMs = 0
-            preview.stopPlayback()
+            player?.release()
+            player = null
+            preview.player = null
             playbackButton.isEnabled = false
             playbackButton.text = "در حال آماده‌سازی فیلم…"
-            preview.setOnPreparedListener { player ->
-                durationMs = player.duration.coerceAtLeast(0)
-                timeline.max = 1000
-                timeline.progress = 0
-                timeline.isEnabled = durationMs > 0
-                positionLabel.text = "00:00:00"
-                durationLabel.text = formatTime(durationMs)
-                playbackButton.isEnabled = durationMs > 0
-                playbackButton.text = "توقف موقت"
-                // Starting playback forces VideoView to render decoded frames instead of
-                // leaving some devices on a black surface until the first manual play.
-                preview.start()
-                handler.removeCallbacks(timelineTicker)
-                handler.post(timelineTicker)
-                statusLabel.text = "فیلم آماده است؛ پخش را می‌توانی متوقف کنی و روی نوار زمانی جابه‌جا شوی."
-            }
-            preview.setOnErrorListener { _, what, extra ->
-                playbackButton.isEnabled = false
-                playbackButton.text = "پخش در دسترس نیست"
-                statusLabel.text = "پیش‌نمایش این فایل پخش نشد (کد $what/$extra). ممکن است کدک دستگاه پشتیبانی نشود."
-                true
-            }
-            preview.setVideoURI(uri)
+            val exoPlayer = ExoPlayer.Builder(this).build()
+            player = exoPlayer
+            preview.player = exoPlayer
+            exoPlayer.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == Player.STATE_READY) {
+                        durationMs = exoPlayer.duration.takeIf { it > 0L && it < Int.MAX_VALUE }?.toInt() ?: 0
+                        timeline.max = 1000
+                        timeline.progress = 0
+                        timeline.isEnabled = durationMs > 0
+                        positionLabel.text = "00:00:00"
+                        durationLabel.text = formatTime(durationMs)
+                        playbackButton.isEnabled = durationMs > 0
+                        playbackButton.text = "پخش فیلم"
+                        statusLabel.text = "فیلم آماده است؛ برای نمایش تصویر، پخش را بزن."
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    playbackButton.isEnabled = false
+                    playbackButton.text = "پخش در دسترس نیست"
+                    statusLabel.text = "پیش‌نمایش پخش نشد: ${error.errorCodeName}. ممکن است کدک یا ظرف فایل پشتیبانی نشود."
+                }
+            })
+            exoPlayer.setMediaItem(MediaItem.fromUri(uri))
+            exoPlayer.prepare()
+            handler.removeCallbacks(timelineTicker)
+            handler.post(timelineTicker)
         }
     }
 
@@ -410,7 +425,11 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacks(timelineTicker)
-        if (::preview.isInitialized) preview.stopPlayback()
+        if (::preview.isInitialized) {
+            player?.release()
+            player = null
+            preview.player = null
+        }
         super.onDestroy()
     }
 
