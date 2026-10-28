@@ -2,7 +2,9 @@ name: Build EsCut Android APK
 
 on:
   push:
+    branches: [main, master]
   pull_request:
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +14,9 @@ jobs:
   build:
     name: Build debug APK
     runs-on: ubuntu-latest
-
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -23,19 +27,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-          accept-android-sdk-licenses: true
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+
+      # Accept licenses non-interactively; avoid the prompt that stopped the first run.
+      - name: Prepare Android SDK
+        shell: bash
+        run: |
+          test -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Verify project files
         run: |
@@ -43,11 +51,12 @@ jobs:
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/escut/app/MainActivity.kt
+          test -f .github/workflows/android.yml
 
       - name: Build APK
         run: gradle --no-daemon --stacktrace assembleDebug
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: EsCut-debug-apk
