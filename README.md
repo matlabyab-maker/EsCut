@@ -5,11 +5,12 @@ Android video trimming project, version 1.
 ## Version 1 features
 - Select a video using Android's document picker.
 - Enter a start and end time in seconds.
+- Generate a horizontal storyboard of sampled video frames; tap one frame to set the start and a second frame to set the end.
 - Export an MP4 by copying supported audio/video samples without re-encoding.
 - Save output under `Movies/EsCut`.
 
 ## Important limitations
-- This first version trims one time range; multi-range deletion and scene detection are planned for later versions.
+- This first version trims one time range; the storyboard currently helps choose the two boundaries rather than supporting arbitrary multi-range deletion yet; multi-range deletion and scene detection are planned for later versions.
 - Stream-copy trimming cannot guarantee exact frame-level cuts for every input. The cut may align to a nearby keyframe, depending on the source.
 - This initial implementation targets MP4 output and common audio/video tracks. Some source codecs or containers may not be accepted by Android's `MediaMuxer`.
 - It does not yet include target file size or resolution conversion; those require a separate re-encoding mode.
@@ -17,7 +18,7 @@ Android video trimming project, version 1.
 ## Build on GitHub
 The workflow is at `.github/workflows/android.yml` and runs on pushes to `main` or `master`, pull requests to those branches, or manual dispatch. It installs Java 17, Android SDK packages, and Gradle 8.13, then builds `app-debug.apk` and uploads it as an Actions artifact.
 
-The workflow intentionally uses the installed Gradle command instead of `./gradlew`, so a missing Gradle Wrapper JAR does not block the first build.
+The workflow intentionally uses the installed Gradle command instead of `./gradlew`, so a missing Gradle Wrapper JAR does not block the first build. The app now opens the selected URI through a file descriptor and marks the output complete only after writing finishes.
 
 ## MGit first push checklist
 1. Create an empty GitHub repository named `EsCut`.
@@ -29,12 +30,8 @@ The workflow intentionally uses the installed Gradle command instead of `./gradl
 If a commit exists only locally and has not been pushed, GitHub Actions cannot see it. Do not use Reset (hard), Delete, or force-push to try to make the workflow appear.
 
 
-## SDK license fix
-The GitHub Actions workflow accepts Android SDK licenses non-interactively with `yes | sdkmanager --licenses` before installing required SDK packages. The “Wrong version in preinstalled sdkmanager” line from setup-android is normally a setup warning; the action downloads command-line tools for use in the workflow.
-
-## Workflow fix: obsolete `tools` package
-The Android setup step explicitly installs `platform-tools` only and accepts SDK licenses non-interactively. It no longer asks `sdkmanager` to install the removed legacy package named `tools`, which caused `Warning: Failed to find package 'tools'` and failed the setup action.
-
-
-## Version 1.0.2 compile fix
-Fixed Kotlin compilation errors reported by GitHub Actions: use `isSingleLine` for the EditText property and convert decimal seconds to microseconds as `Long` before calling the trimming function. The Android SDK workflow avoids the obsolete `tools` package.
+## Version 1.2 changes
+- Added an in-app video player with play/pause, a seek bar, and a current-time / total-duration display.
+- Playback progress updates only while playing and is suppressed during direct user seeking, preventing the progress bar from being overwritten during dragging.
+- Keeps the stream-copy output path as the default; no re-encoding is performed by the trimming code when the source tracks/container are supported.
+- The player relies on Android's built-in media support, so some codecs may not play on every device.
