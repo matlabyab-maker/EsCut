@@ -194,7 +194,7 @@ class MainActivity : Activity() {
     private fun field(hintText: String): EditText = EditText(this).apply {
         hint = hintText
         textSize = 16f
-        singleLine = true
+        setSingleLine(true)
         inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         setPadding(12, 8, 12, 8)
     }
@@ -263,7 +263,7 @@ class MainActivity : Activity() {
         statusLabel.text = "در حال برش… لطفاً برنامه را باز نگه دارید."
         thread {
             try {
-                val outputUri = trimWithoutReencode(uri, startSec * 1_000_000L, endSec * 1_000_000L)
+                val outputUri = trimWithoutReencode(uri, (startSec * 1_000_000.0).toLong(), (endSec * 1_000_000.0).toLong())
                 runOnUiThread {
                     statusLabel.text = "برش تمام شد.\nنام فایل: ${displayName(outputUri)}\nمسیر: Movies/EsCut"
                     cutButton.isEnabled = true
