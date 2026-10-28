@@ -1,38 +1,16 @@
-# EsCut
+# EsCut — Version 1.1
 
-Android video trimming project, version 1.
+Incremental update restoring the video player/preview and adding a horizontal storyboard with clickable thumbnails and a seek timeline.
 
-## Version 1 features
-- Select a video using Android's document picker.
-- Enter a start and end time in seconds.
-- Export an MP4 by copying supported audio/video samples without re-encoding.
-- Save output under `Movies/EsCut`.
+- Select a video from Android's document picker.
+- Preview and play/pause the selected video.
+- Seek using the timeline or tap a storyboard thumbnail.
+- Set the current playhead as start/end; edit times in seconds.
+- Export one selected range by stream-copy (no re-encoding), where Android MediaExtractor/MediaMuxer support the source tracks.
+- Output is saved under Movies/EsCut.
 
-## Important limitations
-- This first version trims one time range; multi-range deletion and scene detection are planned for later versions.
-- Stream-copy trimming cannot guarantee exact frame-level cuts for every input. The cut may align to a nearby keyframe, depending on the source.
-- This initial implementation targets MP4 output and common audio/video tracks. Some source codecs or containers may not be accepted by Android's `MediaMuxer`.
-- It does not yet include target file size or resolution conversion; those require a separate re-encoding mode.
+## Limits
+Stream-copy cuts depend on keyframes and may start at the previous sync frame. This revision exports one range only; multi-range deletion/concatenation, automatic scene detection, target file size and resolution conversion are not implemented yet. Some source codec/container combinations may not mux to MP4. Device testing and a successful GitHub build still need to be confirmed.
 
-## Build on GitHub
-The workflow is at `.github/workflows/android.yml` and runs on pushes to `main` or `master`, pull requests to those branches, or manual dispatch. It installs Java 17, Android SDK packages, and Gradle 8.13, then builds `app-debug.apk` and uploads it as an Actions artifact.
-
-The workflow intentionally uses the installed Gradle command instead of `./gradlew`, so a missing Gradle Wrapper JAR does not block the first build.
-
-## MGit first push checklist
-1. Create an empty GitHub repository named `EsCut`.
-2. Make sure the branch name in MGit matches the repository's branch (`main` is recommended).
-3. Copy the contents of this ZIP into the local repository folder. The `.github/workflows/android.yml` path must be preserved.
-4. In MGit, stage all files, commit, then push to `origin/main` (or the branch actually used by the repository).
-5. Open GitHub's **Actions** tab. The workflow should appear after the push.
-
-If a commit exists only locally and has not been pushed, GitHub Actions cannot see it. Do not use Reset (hard), Delete, or force-push to try to make the workflow appear.
-
-
-## Version 1.1 fixes
-- Added video preview, a custom seek bar, and current/duration time display that updates during playback. The bar supports seeking and uses a normalized scale for long videos.
-- Output names combine the source filename and cut timestamp, for example `OriginalName_cut_20261028_221000.mp4`.
-- Output remains pending until writing finishes, then is published in `Movies/EsCut`.
-
-## Build workflow fix
-The workflow avoids `android-actions/setup-android@v3` because its default legacy `tools` package caused `Failed to find package 'tools'`. It uses the Android SDK already provisioned on the GitHub-hosted runner and explicitly installs only platform 35, build-tools 35.0.0, and platform-tools.
+## GitHub / MGit
+Keep `.github/workflows/android.yml` in this exact path. The workflow builds on push to main/master and uses installed Gradle 8.13 rather than requiring `gradlew`. Stage all files, commit, then push to the same branch. A local-only commit will not start Actions.
