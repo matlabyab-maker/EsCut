@@ -180,7 +180,7 @@ class MainActivity : Activity() {
         }
         val storyboardScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
-            addView(storyboard, HorizontalScrollView.LayoutParams(
+            addView(storyboard, ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
         }
@@ -215,7 +215,7 @@ class MainActivity : Activity() {
     private fun field(hintText: String): EditText = EditText(this).apply {
         hint = hintText
         textSize = 16f
-        singleLine = true
+        setSingleLine(true)
         inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         setPadding(12, 5, 12, 5)
     }
