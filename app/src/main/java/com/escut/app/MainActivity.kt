@@ -39,8 +39,6 @@ class MainActivity : Activity() {
     private lateinit var selectedLabel: TextView
     private lateinit var startInput: EditText
     private lateinit var endInput: EditText
-    private lateinit var splitInput: EditText
-    private lateinit var splitButton: Button
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
     private lateinit var storyboard: LinearLayout
@@ -170,12 +168,6 @@ class MainActivity : Activity() {
         }
         startInput = field("شروع برش (ثانیه)، مثال: 10")
         endInput = field("پایان برش (ثانیه)، مثال: 60")
-        splitInput = field("زمان Split (ثانیه)، مثال: 30 یا 01:30")
-        splitButton = Button(this).apply {
-            text = "Split در زمان واردشده (دو فایل)"
-            isEnabled = false
-            setOnClickListener { startSplit() }
-        }
         val storyboardTitle = TextView(this).apply {
             text = "نوار فریم‌ها — برای انتخاب شروع و پایان، دو فریم را لمس کن"
             textSize = 14f
@@ -209,7 +201,7 @@ class MainActivity : Activity() {
             setPadding(0, 12, 0, 8)
         }
         listOf<View>(title, subtitle, choose, selectedLabel, videoView, playButton, seekBar,
-            timeLabel, startInput, endInput, splitInput, splitButton, storyboardTitle, storyboardScroll, hint, cutButton, statusLabel)
+            timeLabel, startInput, endInput, storyboardTitle, storyboardScroll, hint, cutButton, statusLabel)
             .forEach { content.addView(it, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )) }
@@ -246,7 +238,6 @@ class MainActivity : Activity() {
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
             selectedLabel.text = "فیلم انتخاب شد:\n${uri.lastPathSegment ?: uri}"
             cutButton.isEnabled = true
-            splitButton.isEnabled = true
             startInput.tag = null
             prepared = false
             durationMs = 0
@@ -385,80 +376,10 @@ class MainActivity : Activity() {
         }
     }
 
-
-    private fun parseTimeSeconds(raw: String): Double? {
-        val value = raw.trim()
-        if (value.isEmpty()) return null
-        if (value.contains(":")) {
-            val parts = value.split(":")
-            if (parts.size !in 2..3) return null
-            val nums = parts.map { it.toDoubleOrNull() ?: return null }
-            if (nums.any { it < 0 }) return null
-            return when (parts.size) {
-                2 -> nums[0] * 60.0 + nums[1]
-                else -> nums[0] * 3600.0 + nums[1] * 60.0 + nums[2]
-            }
-        }
-        return value.toDoubleOrNull()
-    }
-
-    private fun startSplit() {
-        val uri = selectedUri ?: return
-        val splitSec = parseTimeSeconds(splitInput.text.toString())
-        if (splitSec == null || splitSec <= 0) {
-            toast("زمان Split را به ثانیه یا به شکل دقیقه:ثانیه وارد کنید.")
-            return
-        }
-        splitButton.isEnabled = false
-        cutButton.isEnabled = false
-        statusLabel.text = "در حال Split و ساخت دو فایل بدون رمزگذاری مجدد…"
-        thread {
-            try {
-                val durationUs = contentResolver.openFileDescriptor(uri, "r").use { pfd ->
-                    if (pfd == null) throw IllegalStateException("فایل ورودی باز نشد")
-                    val retriever = MediaMetadataRetriever()
-                    try {
-                        retriever.setDataSource(pfd.fileDescriptor)
-                        val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                            ?.toLongOrNull() ?: throw IllegalStateException("مدت فیلم خوانده نشد")
-                        durationMs * 1000L
-                    } finally {
-                        retriever.release()
-                    }
-                }
-                val splitUs = (splitSec * 1_000_000.0).toLong()
-                if (splitUs >= durationUs) {
-                    throw IllegalArgumentException("زمان Split باید از مدت کل فیلم کمتر باشد.")
-                }
-                val first = trimWithoutReencode(uri, 0L, splitUs, "EsCut_part1")
-                try {
-                    trimWithoutReencode(uri, splitUs, durationUs + 1_000_000L, "EsCut_part2")
-                } catch (secondError: Exception) {
-                    // Avoid leaving a misleading single half-split result.
-                    try { contentResolver.delete(first, null, null) } catch (_: Exception) {}
-                    throw secondError
-                }
-                runOnUiThread {
-                    statusLabel.text = "Split انجام شد؛ دو فایل در Movies/EsCut ذخیره شدند. برش بدون Encoding مجدد است و مرز دقیق ممکن است به فریم کلیدی وابسته باشد."
-                    splitButton.isEnabled = true
-                    cutButton.isEnabled = true
-                    toast("Split تمام شد؛ دو فایل ساخته شد.")
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    statusLabel.text = "Split ناموفق: ${e.localizedMessage ?: "پردازش انجام نشد"}"
-                    splitButton.isEnabled = true
-                    cutButton.isEnabled = true
-                    toast("Split ناموفق بود.")
-                }
-            }
-        }
-    }
-
-    private fun trimWithoutReencode(inputUri: Uri, startUs: Long, endUs: Long, outputPrefix: String = "EsCut"): Uri {
+    private fun trimWithoutReencode(inputUri: Uri, startUs: Long, endUs: Long): Uri {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
-        val outputUri = createOutputUri(outputPrefix)
+        val outputUri = createOutputUri()
         try {
             contentResolver.openFileDescriptor(inputUri, "r").use { sourceFd ->
                 if (sourceFd == null) throw IllegalStateException("به فایل انتخاب‌شده دسترسی نداریم؛ دوباره فیلم را انتخاب کن.")
@@ -515,10 +436,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun createOutputUri(prefix: String = "EsCut"): Uri {
-        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+    private fun createOutputUri(): Uri {
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val values = ContentValues().apply {
-            put(MediaStore.Video.Media.DISPLAY_NAME, "${prefix}_$stamp.mp4")
+            put(MediaStore.Video.Media.DISPLAY_NAME, "EsCut_$stamp.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
             put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/EsCut")
             put(MediaStore.Video.Media.IS_PENDING, 1)
