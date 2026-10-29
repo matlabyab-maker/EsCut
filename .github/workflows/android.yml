@@ -2,13 +2,9 @@ name: Build EsCut Android APK
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
+    branches: [main, master]
   workflow_dispatch:
 
 permissions:
@@ -28,13 +24,15 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Do not request the obsolete SDK package named "tools".
+      # setup-android installs command-line tools; install only current SDK packages below.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set up Gradle (no wrapper required)
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
@@ -45,7 +43,6 @@ jobs:
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
           test -f app/src/main/java/com/escut/app/MainActivity.kt
-          test -f .github/workflows/android.yml
 
       - name: Build APK
         run: gradle --no-daemon --stacktrace assembleDebug

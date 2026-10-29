@@ -35,3 +35,9 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - Playback progress updates only while playing and is suppressed during direct user seeking, preventing the progress bar from being overwritten during dragging.
 - Keeps the stream-copy output path as the default; no re-encoding is performed by the trimming code when the source tracks/container are supported.
 - The player relies on Android's built-in media support, so some codecs may not play on every device.
+
+
+## Added in this version: Split by time
+- Enter a split point in seconds (for example `30`) or `minutes:seconds` (for example `01:30`) and tap **Split در زمان واردشده (دو فایل)**.
+- EsCut creates two MP4 files in `Movies/EsCut`: the part before the split point and the part after it.
+- This uses stream-copy (no re-encoding); exact boundaries can snap to nearby keyframes depending on the source video.
