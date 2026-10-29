@@ -49,5 +49,8 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - No app source code or storyboard behavior changed in this fix.
 
 
-### Version 1.2.4 workflow fix
+### Version 1.2.5 workflow fix
 - Corrected Android SDK package input to the comma-separated format expected by `android-actions/setup-android@v3`.
+
+
+Version 1.2.5: SDK packages are installed in separate commands to avoid passing a comma-joined string to sdkmanager.

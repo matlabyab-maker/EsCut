@@ -24,15 +24,16 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Do not request the obsolete SDK package named "tools".
-      # setup-android installs command-line tools; install only current SDK packages below.
+      # Install one package here because setup-android treats its packages input as one value.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # Override the action's default package list; the legacy "tools"
-          # package no longer exists in Google's SDK repository.
-          # The action expects a comma-separated package list.
-          packages: platform-tools,platforms;android-35,build-tools;35.0.0
+          packages: platform-tools
+
+      - name: Install Android platform and build tools
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
