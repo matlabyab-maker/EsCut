@@ -47,3 +47,7 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - Explicitly overrides android-actions/setup-android's package list so it does not request the obsolete `tools` package.
 - Installs only `platform-tools`, `platforms;android-35`, and `build-tools;35.0.0`.
 - No app source code or storyboard behavior changed in this fix.
+
+
+### Version 1.2.4 workflow fix
+- Corrected Android SDK package input to the comma-separated format expected by `android-actions/setup-android@v3`.

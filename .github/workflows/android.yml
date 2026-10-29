@@ -31,10 +31,8 @@ jobs:
         with:
           # Override the action's default package list; the legacy "tools"
           # package no longer exists in Google's SDK repository.
-          packages: |
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
+          # The action expects a comma-separated package list.
+          packages: platform-tools,platforms;android-35,build-tools;35.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
