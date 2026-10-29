@@ -20,6 +20,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.HorizontalScrollView
+import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -41,7 +42,7 @@ class MainActivity : Activity() {
     private lateinit var endInput: EditText
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
-    private lateinit var storyboard: LinearLayout
+    private lateinit var storyboard: GridLayout
     private lateinit var videoView: VideoView
     private lateinit var playButton: Button
     private lateinit var seekBar: SeekBar
@@ -174,13 +175,15 @@ class MainActivity : Activity() {
             setTextColor(0xFF172554.toInt())
             setPadding(0, 14, 0, 6)
         }
-        storyboard = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(4, 4, 4, 4)
+        storyboard = GridLayout(this).apply {
+            columnCount = 15
+            rowCount = 3
+            setPadding(2, 2, 2, 2)
+            useDefaultMargins = false
         }
         val storyboardScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
-            addView(storyboard, ViewGroup.LayoutParams(
+            addView(storyboard, HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
         }
@@ -215,7 +218,7 @@ class MainActivity : Activity() {
     private fun field(hintText: String): EditText = EditText(this).apply {
         hint = hintText
         textSize = 16f
-        setSingleLine(true)
+        singleLine = true
         inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
         setPadding(12, 5, 12, 5)
     }
@@ -286,15 +289,17 @@ class MainActivity : Activity() {
                 val lengthMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                     ?: throw IllegalStateException("مدت فیلم خوانده نشد")
                 if (lengthMs <= 0) throw IllegalStateException("مدت فیلم نامعتبر است")
-                val stepMs = if (lengthMs > 20 * 60 * 1000L) 15000L else 5000L
+                // Exactly 45 representative thumbnails: 3 rows x 15 columns.
+                // Sample evenly across the full duration so long videos are covered too.
                 val frames = mutableListOf<Pair<Long, android.graphics.Bitmap>>()
-                var timeMs = 0L
-                while (timeMs < lengthMs && frames.size < 180) {
+                val sampleCount = 45
+                for (index in 0 until sampleCount) {
+                    val timeMs = if (sampleCount == 1) 0L else
+                        (lengthMs - 1L).coerceAtLeast(0L) * index / (sampleCount - 1)
                     try {
                         val bitmap = retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                         if (bitmap != null) frames.add(Pair(timeMs, bitmap))
                     } catch (_: Exception) {}
-                    timeMs += stepMs
                 }
                 runOnUiThread {
                     storyboard.removeAllViews()
@@ -302,17 +307,22 @@ class MainActivity : Activity() {
                         val card = LinearLayout(this).apply {
                             orientation = LinearLayout.VERTICAL
                             gravity = Gravity.CENTER
-                            setPadding(5, 5, 5, 5)
+                            setPadding(1, 1, 1, 1)
                             setBackgroundColor(0xFFE2E8F0.toInt())
+                            layoutParams = GridLayout.LayoutParams().apply {
+                                width = dp(43)
+                                height = dp(48)
+                                setMargins(dp(1), dp(1), dp(1), dp(1))
+                            }
                         }
                         val image = ImageView(this).apply {
                             setImageBitmap(bitmap)
                             scaleType = ImageView.ScaleType.CENTER_CROP
-                            layoutParams = LinearLayout.LayoutParams(dp(150), dp(88))
+                            layoutParams = LinearLayout.LayoutParams(dp(39), dp(27))
                         }
                         val label = TextView(this).apply {
-                            text = formatMs(time.toInt()) + "\nشروع/پایان"
-                            textSize = 11f
+                            text = formatMs(time.toInt())
+                            textSize = 7f
                             gravity = Gravity.CENTER
                             setTextColor(0xFF0F172A.toInt())
                         }
@@ -331,7 +341,7 @@ class MainActivity : Activity() {
                         }
                         storyboard.addView(card)
                     }
-                    statusLabel.text = "نوار فریم‌ها آماده است؛ دو فریم را برای شروع و پایان انتخاب کن."
+                    statusLabel.text = "۴۵ فریم کوچک در ۳ ردیف ۱۵تایی آماده است؛ برای دیدن همه فریم‌ها نوار را افقی حرکت بده. دو فریم را برای شروع و پایان انتخاب کن."
                 }
             } catch (e: Exception) {
                 runOnUiThread { statusLabel.text = "ساخت نوار فریم‌ها ناموفق بود: ${e.localizedMessage ?: "خطای خواندن فیلم"}" }

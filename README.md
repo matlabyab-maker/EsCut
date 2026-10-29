@@ -35,3 +35,9 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - Playback progress updates only while playing and is suppressed during direct user seeking, preventing the progress bar from being overwritten during dragging.
 - Keeps the stream-copy output path as the default; no re-encoding is performed by the trimming code when the source tracks/container are supported.
 - The player relies on Android's built-in media support, so some codecs may not play on every device.
+
+
+## Version 1.2.2 — Compact storyboard
+- Storyboard thumbnails are smaller and arranged as exactly 3 rows of 15 representative frames (45 samples across the full video duration).
+- The storyboard remains horizontally scrollable so all 15 columns can be reached on narrow phone screens.
+- Playback and stream-copy trimming logic are otherwise unchanged.
