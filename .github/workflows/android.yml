@@ -28,6 +28,9 @@ jobs:
       # setup-android installs command-line tools; install only current SDK packages below.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Override the action's default package list, which includes obsolete "tools".
+          packages: platform-tools
 
       - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
