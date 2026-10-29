@@ -41,3 +41,9 @@ If a commit exists only locally and has not been pushed, GitHub Actions cannot s
 - Storyboard thumbnails are smaller and arranged as exactly 3 rows of 15 representative frames (45 samples across the full video duration).
 - The storyboard remains horizontally scrollable so all 15 columns can be reached on narrow phone screens.
 - Playback and stream-copy trimming logic are otherwise unchanged.
+
+
+## Version 1.2.3 — GitHub Actions SDK setup fix
+- Explicitly overrides android-actions/setup-android's package list so it does not request the obsolete `tools` package.
+- Installs only `platform-tools`, `platforms;android-35`, and `build-tools;35.0.0`.
+- No app source code or storyboard behavior changed in this fix.
