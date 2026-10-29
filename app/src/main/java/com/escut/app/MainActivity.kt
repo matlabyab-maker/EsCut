@@ -10,6 +10,7 @@ import android.media.MediaMuxer
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.text.InputType
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +20,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.GridLayout
 import android.widget.ImageView
@@ -183,7 +185,7 @@ class MainActivity : Activity() {
         }
         val storyboardScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
-            addView(storyboard, HorizontalScrollView.LayoutParams(
+            addView(storyboard, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ))
         }
@@ -218,8 +220,8 @@ class MainActivity : Activity() {
     private fun field(hintText: String): EditText = EditText(this).apply {
         hint = hintText
         textSize = 16f
-        singleLine = true
-        inputType = android.text.InputType.TYPE_CLASS_NUMBER or android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+        setSingleLine(true)
+        inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         setPadding(12, 5, 12, 5)
     }
 
