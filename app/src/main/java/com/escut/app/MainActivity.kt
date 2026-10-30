@@ -15,6 +15,7 @@ import android.text.InputType
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
@@ -326,10 +327,17 @@ class MainActivity : Activity() {
     }
 
     private fun attachVideoToPlayer(uri: Uri) {
+        // Stop the previous source first, then register listeners for the new source.
+        try { videoView.stopPlayback() } catch (_: Exception) {}
         prepared = false
         durationMs = 0
+        videoView.visibility = View.VISIBLE
         playButton.isEnabled = false
         playButton.text = "در حال آماده‌سازی…"
+        seekBar.progress = 0
+        seekBar.max = 1
+        timeLabel.text = "00:00 / 00:00"
+
         videoView.setOnPreparedListener { mp ->
             prepared = true
             durationMs = mp.duration.coerceAtLeast(0)
@@ -339,7 +347,6 @@ class MainActivity : Activity() {
             playButton.isEnabled = true
             playButton.text = "مکث"
             mp.isLooping = false
-            // Start only after the media is prepared; this makes the first frame visible.
             videoView.start()
             statusLabel.text = "پلیر آماده است."
         }
@@ -352,14 +359,15 @@ class MainActivity : Activity() {
             prepared = false
             playButton.isEnabled = false
             playButton.text = "پخش"
+            Log.e("EsCut", "VideoView error: what=$what, extra=$extra")
             statusLabel.text = "پخش ناموفق؛ فرمت یا کدک این ویدیو پشتیبانی نمی‌شود ($what/$extra)."
             true
         }
         try {
-            videoView.stopPlayback()
             videoView.setVideoURI(uri)
-            // Do not call start before onPrepared; it can race on some Android versions.
+            videoView.requestFocus()
         } catch (e: Exception) {
+            Log.e("EsCut", "Unable to open video URI", e)
             statusLabel.text = "پخش ناموفق: ${e.localizedMessage ?: "فایل باز نشد"}"
         }
     }
@@ -380,7 +388,7 @@ class MainActivity : Activity() {
                     ?: throw IllegalStateException("مدت فیلم خوانده نشد")
                 if (lengthMs <= 0) throw IllegalStateException("مدت فیلم نامعتبر است")
                 val requestedIntervalSec = intervalInput.text.toString().toDoubleOrNull()?.takeIf { it > 0.0 } ?: 2.0
-                val maxFrames = 180
+                val maxFrames = 60
                 val frameTimes = mutableListOf<Long>()
                 val frames = mutableListOf<Pair<Long, android.graphics.Bitmap>>()
                 if (storyboardMode == StoryboardMode.TIME) {
@@ -393,11 +401,11 @@ class MainActivity : Activity() {
                     }
                 } else {
                     // Approximate scene-change detection: compare small frames at regular probes.
-                    val probeStepMs = maxOf(1000L, lengthMs / maxFrames)
+                    val probeStepMs = maxOf(1500L, lengthMs / maxFrames)
                     var previousSmall: android.graphics.Bitmap? = null
                     var timeMs = 0L
                     while (timeMs < lengthMs && frameTimes.size < maxFrames) {
-                        val small = try { getScaledFrame(retriever, timeMs * 1000L, 32, 18) } catch (_: Exception) { null }
+                        val small = try { getScaledFrame(retriever, timeMs * 1000L, 24, 14) } catch (_: Exception) { null }
                         if (small != null) {
                             val previous = previousSmall
                             if (previous == null || frameDifference(previous, small) >= 42.0) frameTimes.add(timeMs)
@@ -463,7 +471,7 @@ class MainActivity : Activity() {
                     storyboardDurationMs = lengthMs
                     refreshCardSelection()
                     val modeText = if (storyboardMode == StoryboardMode.TIME) "زمانی" else "صحنه‌ای (تشخیص تقریبی)"
-                    storyboardStatus.text = "حالت $modeText؛ ${frames.size} فریم در ۶ ردیف. در حالت زمانی فاصلهٔ واردشده رعایت می‌شود، مگر آنکه تعداد از ۱۸۰ بیشتر شود."
+                    storyboardStatus.text = "حالت $modeText؛ ${frames.size} فریم در ۶ ردیف. در حالت زمانی فاصلهٔ واردشده رعایت می‌شود، مگر آنکه تعداد از ۶۰ بیشتر شود."
                     statusLabel.text = "اسلایدشو آماده است؛ برای حذف چند بخش، حالت انتخاب را روشن و فریم‌ها را لمس کنید."
                 }
             } catch (e: Exception) {
@@ -525,7 +533,10 @@ class MainActivity : Activity() {
         }
         // Storyboard timestamps and duration are milliseconds; MediaExtractor sampleTime is microseconds.
         // Convert deletion ranges to microseconds before comparing them with sample timestamps.
-        val ranges = selectedFrameTimes.mapNotNull { selected ->
+        // Keep only timestamps that still exist in the currently displayed storyboard.
+        // Storyboard times are milliseconds; MediaExtractor sample timestamps are microseconds.
+        val validSelections = selectedFrameTimes.intersect(points.toSet()).sorted()
+        val ranges = validSelections.mapNotNull { selected ->
             val index = points.indexOf(selected)
             if (index < 0) null else {
                 val startMs = selected.coerceIn(0L, storyboardDurationMs)
@@ -562,7 +573,19 @@ class MainActivity : Activity() {
         val extractor = MediaExtractor()
         var muxer: MediaMuxer? = null
         val outputUri = createOutputUri()
-        val ranges = rawRanges.sortedBy { it.first }.fold(mutableListOf<Pair<Long, Long>>()) { acc, range ->
+        val syncTimes = try { findVideoSyncTimes(inputUri) } catch (e: Exception) {
+            Log.w("EsCut", "Could not scan video sync points; using requested deletion boundaries", e)
+            emptyList()
+        }
+        val alignedRanges = rawRanges.map { range ->
+            // Stream-copy cuts should resume at a video keyframe. Extend the end boundary
+            // to the next sync sample when one exists; no codec re-encoding is performed.
+            val nextSync = syncTimes.firstOrNull { it >= range.second }
+            val videoEndUs = storyboardDurationMs * 1000L
+            val safeEnd = nextSync ?: if (range.second < videoEndUs) videoEndUs else range.second
+            range.first to safeEnd
+        }
+        val ranges = alignedRanges.sortedBy { it.first }.fold(mutableListOf<Pair<Long, Long>>()) { acc, range ->
             if (acc.isNotEmpty() && range.first <= acc.last().second) {
                 val previous = acc.removeAt(acc.lastIndex)
                 acc.add(previous.first to maxOf(previous.second, range.second))
@@ -623,6 +646,33 @@ class MainActivity : Activity() {
         } finally {
             try { extractor.release() } catch (_: Exception) {}
             try { muxer?.release() } catch (_: Exception) {}
+        }
+    }
+
+    private fun findVideoSyncTimes(inputUri: Uri): List<Long> {
+        val scan = MediaExtractor()
+        try {
+            contentResolver.openFileDescriptor(inputUri, "r").use { fd ->
+                if (fd == null) throw IllegalStateException("فایل ورودی باز نشد")
+                scan.setDataSource(fd.fileDescriptor)
+            }
+            var videoTrack = -1
+            for (i in 0 until scan.trackCount) {
+                val mime = scan.getTrackFormat(i).getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("video/")) { videoTrack = i; break }
+            }
+            if (videoTrack < 0) return emptyList()
+            scan.selectTrack(videoTrack)
+            val result = mutableListOf<Long>()
+            while (true) {
+                val time = scan.sampleTime
+                if (time < 0L) break
+                if ((scan.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC) != 0) result.add(time)
+                if (!scan.advance()) break
+            }
+            return result
+        } finally {
+            try { scan.release() } catch (_: Exception) {}
         }
     }
 
