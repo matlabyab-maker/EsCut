@@ -319,30 +319,48 @@ class MainActivity : Activity() {
             timeLabel.text = "00:00 / 00:00"
             playButton.isEnabled = false
             playButton.text = "پخش"
-            try {
-                videoView.stopPlayback()
-                videoView.setVideoURI(uri)
-                videoView.setOnPreparedListener { mp ->
-                    prepared = true
-                    durationMs = mp.duration.coerceAtLeast(0)
-                    seekBar.max = durationMs.coerceAtLeast(1)
-                    seekBar.progress = 0
-                    timeLabel.text = "${formatMs(0)} / ${formatMs(durationMs)}"
-                    playButton.isEnabled = true
-                    statusLabel.text = "پلیر آماده است. نوار زمان با موقعیت واقعی پخش به‌روز می‌شود."
-                }
-                videoView.setOnCompletionListener {
-                    playButton.text = "پخش"
-                    if (durationMs > 0) seekBar.progress = durationMs
-                    timeLabel.text = "${formatMs(durationMs)} / ${formatMs(durationMs)}"
-                }
-                videoView.start()
-                playButton.text = "مکث"
-            } catch (e: Exception) {
-                statusLabel.text = "پخش ناموفق: ${e.localizedMessage ?: "فایل باز نشد"}"
-            }
+            attachVideoToPlayer(uri)
             statusLabel.text = "در حال آماده‌سازی پلیر و نوار فریم‌ها…"
             loadStoryboard(uri)
+        }
+    }
+
+    private fun attachVideoToPlayer(uri: Uri) {
+        prepared = false
+        durationMs = 0
+        playButton.isEnabled = false
+        playButton.text = "در حال آماده‌سازی…"
+        videoView.setOnPreparedListener { mp ->
+            prepared = true
+            durationMs = mp.duration.coerceAtLeast(0)
+            seekBar.max = durationMs.coerceAtLeast(1)
+            seekBar.progress = 0
+            timeLabel.text = "${formatMs(0)} / ${formatMs(durationMs)}"
+            playButton.isEnabled = true
+            playButton.text = "مکث"
+            mp.isLooping = false
+            // Start only after the media is prepared; this makes the first frame visible.
+            videoView.start()
+            statusLabel.text = "پلیر آماده است."
+        }
+        videoView.setOnCompletionListener {
+            playButton.text = "پخش"
+            if (durationMs > 0) seekBar.progress = durationMs
+            timeLabel.text = "${formatMs(durationMs)} / ${formatMs(durationMs)}"
+        }
+        videoView.setOnErrorListener { _, what, extra ->
+            prepared = false
+            playButton.isEnabled = false
+            playButton.text = "پخش"
+            statusLabel.text = "پخش ناموفق؛ فرمت یا کدک این ویدیو پشتیبانی نمی‌شود ($what/$extra)."
+            true
+        }
+        try {
+            videoView.stopPlayback()
+            videoView.setVideoURI(uri)
+            // Do not call start before onPrepared; it can race on some Android versions.
+        } catch (e: Exception) {
+            statusLabel.text = "پخش ناموفق: ${e.localizedMessage ?: "فایل باز نشد"}"
         }
     }
 
@@ -362,7 +380,7 @@ class MainActivity : Activity() {
                     ?: throw IllegalStateException("مدت فیلم خوانده نشد")
                 if (lengthMs <= 0) throw IllegalStateException("مدت فیلم نامعتبر است")
                 val requestedIntervalSec = intervalInput.text.toString().toDoubleOrNull()?.takeIf { it > 0.0 } ?: 2.0
-                val maxFrames = 300
+                val maxFrames = 180
                 val frameTimes = mutableListOf<Long>()
                 val frames = mutableListOf<Pair<Long, android.graphics.Bitmap>>()
                 if (storyboardMode == StoryboardMode.TIME) {
@@ -445,7 +463,7 @@ class MainActivity : Activity() {
                     storyboardDurationMs = lengthMs
                     refreshCardSelection()
                     val modeText = if (storyboardMode == StoryboardMode.TIME) "زمانی" else "صحنه‌ای (تشخیص تقریبی)"
-                    storyboardStatus.text = "حالت $modeText؛ ${frames.size} فریم در ۶ ردیف. در حالت زمانی فاصلهٔ واردشده رعایت می‌شود، مگر آنکه تعداد از ۳۰۰ بیشتر شود."
+                    storyboardStatus.text = "حالت $modeText؛ ${frames.size} فریم در ۶ ردیف. در حالت زمانی فاصلهٔ واردشده رعایت می‌شود، مگر آنکه تعداد از ۱۸۰ بیشتر شود."
                     statusLabel.text = "اسلایدشو آماده است؛ برای حذف چند بخش، حالت انتخاب را روشن و فریم‌ها را لمس کنید."
                 }
             } catch (e: Exception) {
@@ -510,8 +528,9 @@ class MainActivity : Activity() {
         val ranges = selectedFrameTimes.mapNotNull { selected ->
             val index = points.indexOf(selected)
             if (index < 0) null else {
-                val startMs = selected
-                val endMs = if (index + 1 < points.size) points[index + 1] else storyboardDurationMs
+                val startMs = selected.coerceIn(0L, storyboardDurationMs)
+                val endMs = (if (index + 1 < points.size) points[index + 1] else storyboardDurationMs)
+                    .coerceIn(0L, storyboardDurationMs)
                 if (endMs > startMs) (startMs * 1000L) to (endMs * 1000L) else null
             }
         }.sortedBy { it.first }
@@ -525,9 +544,9 @@ class MainActivity : Activity() {
             try {
                 removeRangesWithoutReencode(uri, ranges)
                 runOnUiThread {
-                    statusLabel.text = "حذف بازه‌های انتخاب‌شده تمام شد؛ خروجی در Movies/EsCut ذخیره شد."
+                    statusLabel.text = "بازه‌های انتخاب‌شده از نسخهٔ خروجی حذف شدند؛ فایل جدید در Movies/EsCut ذخیره شد و فایل اصلی دست‌نخورده ماند."
                     deleteSelectedButton.isEnabled = true
-                    toast("حذف بخش‌های انتخاب‌شده تمام شد.")
+                    toast("نسخهٔ خروجی بدون بازه‌های انتخاب‌شده ساخته شد.")
                 }
             } catch (e: Exception) {
                 runOnUiThread {
@@ -574,9 +593,13 @@ class MainActivity : Activity() {
                     val track = extractor.sampleTrackIndex
                     if (track < 0) break
                     val sampleTime = extractor.sampleTime
-                    val deleted = ranges.firstOrNull { sampleTime >= it.first && sampleTime < it.second }
-                    if (deleted == null && trackMap.containsKey(track)) {
-                        val removedBefore = ranges.filter { it.second <= sampleTime }.sumOf { it.second - it.first }
+                    val deleted = ranges.any { sampleTime >= it.first && sampleTime < it.second }
+                    if (!deleted && trackMap.containsKey(track)) {
+                        // Shift retained samples left by the exact duration of all deleted ranges
+                        // that have ended before this sample. Keep timestamps monotonic per track.
+                        val removedBefore = ranges.asSequence()
+                            .filter { it.second <= sampleTime }
+                            .sumOf { it.second - it.first }
                         buffer.clear()
                         val size = extractor.readSampleData(buffer, 0)
                         if (size < 0) break
