@@ -10,6 +10,7 @@ import android.media.MediaMuxer
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.text.InputType
 import android.os.Environment
 import android.os.Handler
@@ -268,9 +269,12 @@ class MainActivity : Activity() {
         listOf<View>(title, subtitle, choose, selectedLabel, videoView, playButton, seekBar,
             timeLabel, startInput, endInput, storyboardTitle, modeRow, intervalInput, rebuildButton,
             storyboardStatus, storyboardScroll, selectDeleteButton, deleteSelectedButton, hint, cutButton, statusLabel)
-            .forEach { content.addView(it, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )) }
+            .forEach { view ->
+                val height = if (view === videoView) dp(220) else ViewGroup.LayoutParams.WRAP_CONTENT
+                content.addView(view, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, height
+                ))
+            }
         scroll.addView(content)
         root.addView(scroll)
         setContentView(root)
@@ -375,10 +379,8 @@ class MainActivity : Activity() {
                     var previousSmall: android.graphics.Bitmap? = null
                     var timeMs = 0L
                     while (timeMs < lengthMs && frameTimes.size < maxFrames) {
-                        val raw = try { retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST) } catch (_: Exception) { null }
-                        if (raw != null) {
-                            val small = android.graphics.Bitmap.createScaledBitmap(raw, 32, 18, true)
-                            if (small !== raw) raw.recycle()
+                        val small = try { getScaledFrame(retriever, timeMs * 1000L, 32, 18) } catch (_: Exception) { null }
+                        if (small != null) {
                             val previous = previousSmall
                             if (previous == null || frameDifference(previous, small) >= 42.0) frameTimes.add(timeMs)
                             previousSmall?.recycle()
@@ -391,12 +393,8 @@ class MainActivity : Activity() {
                 }
                 frameTimes.distinct().forEach { timeMs ->
                     try {
-                        val rawBitmap = retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        if (rawBitmap != null) {
-                            val thumbnail = android.graphics.Bitmap.createScaledBitmap(rawBitmap, 160, 90, true)
-                            if (thumbnail !== rawBitmap) rawBitmap.recycle()
-                            frames.add(Pair(timeMs, thumbnail))
-                        }
+                        val thumbnail = getScaledFrame(retriever, timeMs * 1000L, 160, 90, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        if (thumbnail != null) frames.add(Pair(timeMs, thumbnail))
                     } catch (_: Exception) {}
                 }
                 runOnUiThread {
@@ -456,6 +454,26 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun getScaledFrame(
+        retriever: MediaMetadataRetriever,
+        timeUs: Long,
+        width: Int,
+        height: Int,
+        option: Int = MediaMetadataRetriever.OPTION_CLOSEST
+    ): android.graphics.Bitmap? {
+        // Scaled decoding avoids decoding full-resolution frames for tiny storyboard cards.
+        return if (Build.VERSION.SDK_INT >= 27) {
+            retriever.getScaledFrameAtTime(timeUs, option, width, height)
+        } else {
+            val raw = retriever.getFrameAtTime(timeUs, option) ?: return null
+            try {
+                android.graphics.Bitmap.createScaledBitmap(raw, width, height, true)
+            } finally {
+                raw.recycle()
+            }
+        }
+    }
+
     private fun frameDifference(a: android.graphics.Bitmap, b: android.graphics.Bitmap): Double {
         val width = minOf(a.width, b.width)
         val height = minOf(a.height, b.height)
@@ -487,12 +505,14 @@ class MainActivity : Activity() {
             toast("ابتدا یک یا چند فریم را انتخاب کنید.")
             return
         }
+        // Storyboard timestamps and duration are milliseconds; MediaExtractor sampleTime is microseconds.
+        // Convert deletion ranges to microseconds before comparing them with sample timestamps.
         val ranges = selectedFrameTimes.mapNotNull { selected ->
             val index = points.indexOf(selected)
             if (index < 0) null else {
-                val start = selected
-                val end = if (index + 1 < points.size) points[index + 1] else storyboardDurationMs
-                if (end > start) start to end else null
+                val startMs = selected
+                val endMs = if (index + 1 < points.size) points[index + 1] else storyboardDurationMs
+                if (endMs > startMs) (startMs * 1000L) to (endMs * 1000L) else null
             }
         }.sortedBy { it.first }
         if (ranges.isEmpty()) {
