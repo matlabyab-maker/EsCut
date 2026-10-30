@@ -45,6 +45,18 @@ class MainActivity : Activity() {
     private lateinit var cutButton: Button
     private lateinit var statusLabel: TextView
     private lateinit var storyboard: GridLayout
+    private lateinit var intervalInput: EditText
+    private lateinit var storyboardStatus: TextView
+    private lateinit var selectDeleteButton: Button
+    private lateinit var deleteSelectedButton: Button
+    private var storyboardMode: StoryboardMode = StoryboardMode.TIME
+    private var selectionMode = false
+    private var storyboardDurationMs = 0L
+    private val storyboardTimes = mutableListOf<Long>()
+    private val selectedFrameTimes = linkedSetOf<Long>()
+    private val frameCards = mutableMapOf<Long, View>()
+
+    private enum class StoryboardMode { TIME, SCENE }
     private lateinit var videoView: VideoView
     private lateinit var playButton: Button
     private lateinit var seekBar: SeekBar
@@ -177,11 +189,59 @@ class MainActivity : Activity() {
             setTextColor(0xFF172554.toInt())
             setPadding(0, 14, 0, 6)
         }
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val timeModeButton = Button(this).apply {
+            text = "حالت زمانی"
+            setOnClickListener {
+                storyboardMode = StoryboardMode.TIME
+                selectedFrameTimes.clear()
+                selectedUri?.let { loadStoryboard(it) }
+            }
+        }
+        val sceneModeButton = Button(this).apply {
+            text = "حالت صحنه"
+            setOnClickListener {
+                storyboardMode = StoryboardMode.SCENE
+                selectedFrameTimes.clear()
+                selectedUri?.let { loadStoryboard(it) }
+            }
+        }
+        modeRow.addView(timeModeButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        modeRow.addView(sceneModeButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        intervalInput = field("فاصلهٔ فریم‌ها به ثانیه؛ مثلاً 2 یا 0.5").apply { setText("2") }
+        val rebuildButton = Button(this).apply {
+            text = "ساخت دوبارهٔ اسلایدشو"
+            setOnClickListener {
+                selectedUri?.let {
+                    selectedFrameTimes.clear()
+                    loadStoryboard(it)
+                } ?: toast("ابتدا یک فیلم انتخاب کنید.")
+            }
+        }
         storyboard = GridLayout(this).apply {
-            columnCount = 15
-            rowCount = 3
+            columnCount = 50
+            rowCount = 6
             setPadding(2, 2, 2, 2)
             useDefaultMargins = false
+        }
+        selectDeleteButton = Button(this).apply {
+            text = "انتخاب فریم‌ها برای حذف: خاموش"
+            setOnClickListener {
+                selectionMode = !selectionMode
+                text = if (selectionMode) "انتخاب فریم‌ها برای حذف: روشن" else "انتخاب فریم‌ها برای حذف: خاموش"
+                if (!selectionMode) selectedFrameTimes.clear()
+                refreshCardSelection()
+            }
+        }
+        deleteSelectedButton = Button(this).apply {
+            text = "حذف فریم‌ها/صحنه‌های انتخاب‌شده"
+            isEnabled = false
+            setOnClickListener { deleteSelectedFrames() }
+        }
+        storyboardStatus = TextView(this).apply {
+            text = "حالت زمانی: فاصله را به ثانیه وارد کنید؛ حالت صحنه تغییرات تصویری احتمالی را پیدا می‌کند."
+            textSize = 12f
+            setTextColor(0xFF475569.toInt())
         }
         val storyboardScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
@@ -206,7 +266,8 @@ class MainActivity : Activity() {
             setPadding(0, 12, 0, 8)
         }
         listOf<View>(title, subtitle, choose, selectedLabel, videoView, playButton, seekBar,
-            timeLabel, startInput, endInput, storyboardTitle, storyboardScroll, hint, cutButton, statusLabel)
+            timeLabel, startInput, endInput, storyboardTitle, modeRow, intervalInput, rebuildButton,
+            storyboardStatus, storyboardScroll, selectDeleteButton, deleteSelectedButton, hint, cutButton, statusLabel)
             .forEach { content.addView(it, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             )) }
@@ -240,6 +301,9 @@ class MainActivity : Activity() {
         if (requestCode == pickVideoCode && resultCode == RESULT_OK) {
             val uri = data?.data ?: return
             selectedUri = uri
+            selectedFrameTimes.clear()
+            selectionMode = false
+            if (::selectDeleteButton.isInitialized) selectDeleteButton.text = "انتخاب فریم‌ها برای حذف: خاموش"
             try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
             selectedLabel.text = "فیلم انتخاب شد:\n${uri.lastPathSegment ?: uri}"
             cutButton.isEnabled = true
@@ -280,6 +344,8 @@ class MainActivity : Activity() {
 
     private fun loadStoryboard(uri: Uri) {
         storyboard.removeAllViews()
+        frameCards.clear()
+        storyboardTimes.clear()
         thread {
             var retriever: MediaMetadataRetriever? = null
             try {
@@ -291,16 +357,46 @@ class MainActivity : Activity() {
                 val lengthMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
                     ?: throw IllegalStateException("مدت فیلم خوانده نشد")
                 if (lengthMs <= 0) throw IllegalStateException("مدت فیلم نامعتبر است")
-                // Exactly 45 representative thumbnails: 3 rows x 15 columns.
-                // Sample evenly across the full duration so long videos are covered too.
+                val requestedIntervalSec = intervalInput.text.toString().toDoubleOrNull()?.takeIf { it > 0.0 } ?: 2.0
+                val maxFrames = 300
+                val frameTimes = mutableListOf<Long>()
                 val frames = mutableListOf<Pair<Long, android.graphics.Bitmap>>()
-                val sampleCount = 45
-                for (index in 0 until sampleCount) {
-                    val timeMs = if (sampleCount == 1) 0L else
-                        (lengthMs - 1L).coerceAtLeast(0L) * index / (sampleCount - 1)
+                if (storyboardMode == StoryboardMode.TIME) {
+                    val effectiveIntervalMs = maxOf(1L, (requestedIntervalSec * 1000.0).toLong())
+                    val intervalMs = maxOf(effectiveIntervalMs, (lengthMs / maxFrames).coerceAtLeast(1L))
+                    var timeMs = 0L
+                    while (timeMs < lengthMs && frameTimes.size < maxFrames) {
+                        frameTimes.add(timeMs)
+                        timeMs += intervalMs
+                    }
+                } else {
+                    // Approximate scene-change detection: compare small frames at regular probes.
+                    val probeStepMs = maxOf(1000L, lengthMs / maxFrames)
+                    var previousSmall: android.graphics.Bitmap? = null
+                    var timeMs = 0L
+                    while (timeMs < lengthMs && frameTimes.size < maxFrames) {
+                        val raw = try { retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST) } catch (_: Exception) { null }
+                        if (raw != null) {
+                            val small = android.graphics.Bitmap.createScaledBitmap(raw, 32, 18, true)
+                            if (small !== raw) raw.recycle()
+                            val previous = previousSmall
+                            if (previous == null || frameDifference(previous, small) >= 42.0) frameTimes.add(timeMs)
+                            previousSmall?.recycle()
+                            previousSmall = small
+                        }
+                        timeMs += probeStepMs
+                    }
+                    previousSmall?.recycle()
+                    if (frameTimes.isEmpty()) frameTimes.add(0L)
+                }
+                frameTimes.distinct().forEach { timeMs ->
                     try {
-                        val bitmap = retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                        if (bitmap != null) frames.add(Pair(timeMs, bitmap))
+                        val rawBitmap = retriever.getFrameAtTime(timeMs * 1000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        if (rawBitmap != null) {
+                            val thumbnail = android.graphics.Bitmap.createScaledBitmap(rawBitmap, 160, 90, true)
+                            if (thumbnail !== rawBitmap) rawBitmap.recycle()
+                            frames.add(Pair(timeMs, thumbnail))
+                        }
                     } catch (_: Exception) {}
                 }
                 runOnUiThread {
@@ -331,7 +427,10 @@ class MainActivity : Activity() {
                         card.addView(image)
                         card.addView(label)
                         card.setOnClickListener {
-                            if (startInput.tag != "start_set") {
+                            if (selectionMode) {
+                                if (!selectedFrameTimes.add(time)) selectedFrameTimes.remove(time)
+                                refreshCardSelection()
+                            } else if (startInput.tag != "start_set") {
                                 startInput.setText(String.format(Locale.US, "%.3f", time / 1000.0))
                                 startInput.tag = "start_set"
                                 toast("شروع برش تنظیم شد؛ فریم پایان را انتخاب کن.")
@@ -341,13 +440,146 @@ class MainActivity : Activity() {
                                 toast("پایان برش تنظیم شد.")
                             }
                         }
+                        storyboardTimes.add(time)
+                        frameCards[time] = card
                         storyboard.addView(card)
                     }
-                    statusLabel.text = "۴۵ فریم کوچک در ۳ ردیف ۱۵تایی آماده است؛ برای دیدن همه فریم‌ها نوار را افقی حرکت بده. دو فریم را برای شروع و پایان انتخاب کن."
+                    storyboardDurationMs = lengthMs
+                    refreshCardSelection()
+                    val modeText = if (storyboardMode == StoryboardMode.TIME) "زمانی" else "صحنه‌ای (تشخیص تقریبی)"
+                    storyboardStatus.text = "حالت $modeText؛ ${frames.size} فریم در ۶ ردیف. در حالت زمانی فاصلهٔ واردشده رعایت می‌شود، مگر آنکه تعداد از ۳۰۰ بیشتر شود."
+                    statusLabel.text = "اسلایدشو آماده است؛ برای حذف چند بخش، حالت انتخاب را روشن و فریم‌ها را لمس کنید."
                 }
             } catch (e: Exception) {
                 runOnUiThread { statusLabel.text = "ساخت نوار فریم‌ها ناموفق بود: ${e.localizedMessage ?: "خطای خواندن فیلم"}" }
             } finally { try { retriever?.release() } catch (_: Exception) {} }
+        }
+    }
+
+    private fun frameDifference(a: android.graphics.Bitmap, b: android.graphics.Bitmap): Double {
+        val width = minOf(a.width, b.width)
+        val height = minOf(a.height, b.height)
+        if (width == 0 || height == 0) return 0.0
+        var sum = 0L
+        var count = 0
+        for (y in 0 until height step 2) for (x in 0 until width step 2) {
+            val ca = a.getPixel(x, y)
+            val cb = b.getPixel(x, y)
+            sum += kotlin.math.abs(android.graphics.Color.red(ca) - android.graphics.Color.red(cb))
+            sum += kotlin.math.abs(android.graphics.Color.green(ca) - android.graphics.Color.green(cb))
+            sum += kotlin.math.abs(android.graphics.Color.blue(ca) - android.graphics.Color.blue(cb))
+            count += 3
+        }
+        return if (count == 0) 0.0 else sum.toDouble() / count
+    }
+
+    private fun refreshCardSelection() {
+        frameCards.forEach { (time, view) ->
+            view.setBackgroundColor(if (time in selectedFrameTimes) 0xFFFFC107.toInt() else 0xFFE2E8F0.toInt())
+        }
+        if (::deleteSelectedButton.isInitialized) deleteSelectedButton.isEnabled = selectedFrameTimes.isNotEmpty()
+    }
+
+    private fun deleteSelectedFrames() {
+        val uri = selectedUri ?: return
+        val points = storyboardTimes.sorted()
+        if (selectedFrameTimes.isEmpty() || points.isEmpty()) {
+            toast("ابتدا یک یا چند فریم را انتخاب کنید.")
+            return
+        }
+        val ranges = selectedFrameTimes.mapNotNull { selected ->
+            val index = points.indexOf(selected)
+            if (index < 0) null else {
+                val start = selected
+                val end = if (index + 1 < points.size) points[index + 1] else storyboardDurationMs
+                if (end > start) start to end else null
+            }
+        }.sortedBy { it.first }
+        if (ranges.isEmpty()) {
+            toast("بازهٔ قابل حذفی پیدا نشد.")
+            return
+        }
+        deleteSelectedButton.isEnabled = false
+        statusLabel.text = "در حال حذف ${ranges.size} بازه بدون رمزگذاری مجدد…"
+        thread {
+            try {
+                removeRangesWithoutReencode(uri, ranges)
+                runOnUiThread {
+                    statusLabel.text = "حذف بازه‌های انتخاب‌شده تمام شد؛ خروجی در Movies/EsCut ذخیره شد."
+                    deleteSelectedButton.isEnabled = true
+                    toast("حذف بخش‌های انتخاب‌شده تمام شد.")
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    statusLabel.text = "خطای حذف: ${e.localizedMessage ?: "پردازش انجام نشد"}"
+                    deleteSelectedButton.isEnabled = true
+                    toast("حذف بخش‌ها ناموفق بود.")
+                }
+            }
+        }
+    }
+
+    private fun removeRangesWithoutReencode(inputUri: Uri, rawRanges: List<Pair<Long, Long>>): Uri {
+        val extractor = MediaExtractor()
+        var muxer: MediaMuxer? = null
+        val outputUri = createOutputUri()
+        val ranges = rawRanges.sortedBy { it.first }.fold(mutableListOf<Pair<Long, Long>>()) { acc, range ->
+            if (acc.isNotEmpty() && range.first <= acc.last().second) {
+                val previous = acc.removeAt(acc.lastIndex)
+                acc.add(previous.first to maxOf(previous.second, range.second))
+            } else acc.add(range)
+            acc
+        }
+        try {
+            contentResolver.openFileDescriptor(inputUri, "r").use { fd ->
+                if (fd == null) throw IllegalStateException("فایل ورودی باز نشد")
+                extractor.setDataSource(fd.fileDescriptor)
+            }
+            val outputFd = contentResolver.openFileDescriptor(outputUri, "rw") ?: throw IllegalStateException("فایل خروجی باز نشد")
+            outputFd.use { parcel ->
+                muxer = MediaMuxer(parcel.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+                val trackMap = mutableMapOf<Int, Int>()
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                    if (mime.startsWith("video/") || mime.startsWith("audio/")) trackMap[i] = muxer!!.addTrack(format)
+                }
+                if (trackMap.isEmpty()) throw IllegalStateException("ردیف صوتی یا تصویری پیدا نشد")
+                muxer!!.start()
+                trackMap.keys.forEach { extractor.selectTrack(it) }
+                val buffer = ByteBuffer.allocateDirect(8 * 1024 * 1024)
+                val info = MediaCodec.BufferInfo()
+                var written = 0
+                while (true) {
+                    val track = extractor.sampleTrackIndex
+                    if (track < 0) break
+                    val sampleTime = extractor.sampleTime
+                    val deleted = ranges.firstOrNull { sampleTime >= it.first && sampleTime < it.second }
+                    if (deleted == null && trackMap.containsKey(track)) {
+                        val removedBefore = ranges.filter { it.second <= sampleTime }.sumOf { it.second - it.first }
+                        buffer.clear()
+                        val size = extractor.readSampleData(buffer, 0)
+                        if (size < 0) break
+                        info.offset = 0
+                        info.size = size
+                        info.presentationTimeUs = (sampleTime - removedBefore).coerceAtLeast(0L)
+                        info.flags = extractor.sampleFlags
+                        muxer!!.writeSampleData(trackMap[track]!!, buffer, info)
+                        written++
+                    }
+                    if (!extractor.advance()) break
+                }
+                if (written == 0) throw IllegalStateException("تمام بازه‌های فیلم انتخاب شده‌اند؛ بخشی از فیلم را باقی بگذارید.")
+                muxer!!.stop()
+            }
+            contentResolver.update(outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+            return outputUri
+        } catch (e: Exception) {
+            try { contentResolver.delete(outputUri, null, null) } catch (_: Exception) {}
+            throw e
+        } finally {
+            try { extractor.release() } catch (_: Exception) {}
+            try { muxer?.release() } catch (_: Exception) {}
         }
     }
 
